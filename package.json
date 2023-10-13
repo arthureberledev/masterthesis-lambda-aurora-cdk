@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
+    "deploy": "tsc & cdk deploy",
     "cdk": "cdk"
   },
   "devDependencies": {
@@ -17,6 +18,7 @@
     "typescript": "~5.2.2"
   },
   "dependencies": {
+    "@aws-sdk/client-rds-data": "^3.427.0",
     "@aws-sdk/client-secrets-manager": "^3.427.0",
     "@types/aws-lambda": "^8.10.124",
     "aws-cdk-lib": "2.100.0",

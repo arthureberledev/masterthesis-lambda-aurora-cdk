@@ -1,194 +1,113 @@
 import * as cdk from "aws-cdk-lib";
-import { Aspects, CfnOutput } from "aws-cdk-lib";
-import {
-  Peer,
-  Port,
-  SecurityGroup,
-  SubnetType,
-  Vpc,
-} from "aws-cdk-lib/aws-ec2";
-import * as apigateway from "aws-cdk-lib/aws-apigateway";
-import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as nodejslambda from "aws-cdk-lib/aws-lambda-nodejs";
-import * as rds from "aws-cdk-lib/aws-rds";
-import { CfnDBCluster } from "aws-cdk-lib/aws-rds";
+import { CfnOutput } from "aws-cdk-lib";
+import * as lambda from "aws-cdk-lib/aws-lambda-nodejs";
 import { Construct } from "constructs";
-import * as path from "path";
 
 export class CdkStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
-
-    // Create a vpc
-    const vpc = new Vpc(this, "VPC", {
-      cidr: "10.0.0.0/16",
-      subnetConfiguration: [{ name: "egress", subnetType: SubnetType.PUBLIC }], // only one subnet is needed
-      natGateways: 0, // disable NAT gateways
+    const dbSecret = new cdk.aws_rds.DatabaseSecret(this, "AuroraSecret", {
+      username: "admin",
     });
 
-    // Create a security group for aurora db
-    const dbSecurityGroup = new SecurityGroup(this, "DbSecurityGroup", {
-      vpc: vpc, // use the vpc created above
-      allowAllOutbound: true, // allow outbound traffic to anywhere
-    });
-
-    // Allow inbound traffic from anywhere to the db
-    dbSecurityGroup.addIngressRule(
-      Peer.anyIpv4(),
-      Port.tcp(3306), // allow inbound traffic on port 3306 (default mysql port)
-      "allow inbound traffic from anywhere to the db on port 3306"
-    );
-
-    // Create a db cluster
-    const dbCluster = new rds.DatabaseCluster(this, "DbCluster", {
-      engine: rds.DatabaseClusterEngine.auroraMysql({
-        version: rds.AuroraMysqlEngineVersion.VER_3_04_0,
-      }),
-      writer: rds.ClusterInstance.provisioned("writer"),
-      readers: [
-        rds.ClusterInstance.serverlessV2("reader", {
-          scaleWithWriter: true,
-        }),
-      ],
-      securityGroups: [dbSecurityGroup],
-      vpcSubnets: vpc.selectSubnets({
-        subnetType: SubnetType.PUBLIC,
-      }),
-      vpc,
-      port: 3306,
-    });
-
-    // Add capacity to the db cluster to enable scaling
-    Aspects.of(dbCluster).add({
-      visit(node) {
-        if (node instanceof CfnDBCluster) {
-          node.serverlessV2ScalingConfiguration = {
-            minCapacity: 0.5, // min capacity is 0.5 vCPU
-            maxCapacity: 1, // max capacity is 1 vCPU (default)
-          };
-        }
+    const dbCluster = new cdk.aws_rds.ServerlessCluster(this, "AuroraCluster", {
+      engine: cdk.aws_rds.DatabaseClusterEngine.AURORA_MYSQL,
+      credentials: cdk.aws_rds.Credentials.fromSecret(dbSecret),
+      clusterIdentifier: "masterthesis-aurora-cluster",
+      defaultDatabaseName: "masterthesis_aurora_db",
+      enableDataApi: true,
+      scaling: {
+        autoPause: cdk.Duration.minutes(10),
+        minCapacity: 2,
+        maxCapacity: 16,
       },
     });
 
-    // Create layer to hold the shared database configuration code
-    const sharedLayer = new lambda.LayerVersion(this, "SharedLayer", {
-      code: lambda.Code.fromAsset(
-        path.resolve(__dirname, "..", "lambda", "shared")
-      ),
-      compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
-    });
-
-    // Define lambda functions
-    const userFunctionsPath = path.resolve(__dirname, "..", "lambda", "users");
-
-    // const getUsersFunction = new lambda.Function(this, "GetUsersLambda", {
-    //   runtime: lambda.Runtime.NODEJS_18_X,
-    //   code: lambda.Code.fromAsset(userFunctionsPath),
-    //   handler: "get-users.handler",
-    //   environment: {
-    //     // Pass the secret arn to the lambda functions
-    //     databaseSecretArn: dbCluster.secret?.secretArn ?? "",
-    //   },
-    // });
-    const getUsersFunction = new nodejslambda.NodejsFunction(
-      this,
-      "GetUsersLambda",
-      {
-        entry: "./lambda/users/get-users.ts",
-        handler: "handler",
-        environment: {
-          // Pass the secret arn to the lambda functions
-          databaseSecretArn: dbCluster.secret?.secretArn ?? "",
-        },
-      }
-    );
-
-    const getUserByIdFunction = new lambda.Function(this, "GetUserByIdLambda", {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      code: lambda.Code.fromAsset(userFunctionsPath),
-      handler: "get-user-by-id.handler",
-      layers: [sharedLayer],
+    const getUsers = new lambda.NodejsFunction(this, "getUsers", {
+      entry: "./lambda/users/get-users.ts",
+      handler: "handler",
       environment: {
-        databaseSecretArn: dbCluster.secret?.secretArn ?? "",
+        CLUSTER_ARN: dbCluster.clusterArn,
+        SECRET_ARN: dbCluster.secret?.secretArn ?? "",
       },
+      timeout: cdk.Duration.seconds(30),
     });
 
-    const createUserFunction = new lambda.Function(this, "CreateUserLambda", {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      code: lambda.Code.fromAsset(userFunctionsPath),
-      handler: "create-user.handler",
-      layers: [sharedLayer],
+    const getUserById = new lambda.NodejsFunction(this, "getUserById", {
+      entry: "./lambda/users/get-user-by-id.ts",
+      handler: "handler",
       environment: {
-        databaseSecretArn: dbCluster.secret?.secretArn ?? "",
+        CLUSTER_ARN: dbCluster.clusterArn,
+        SECRET_ARN: dbCluster.secret?.secretArn ?? "",
       },
+      timeout: cdk.Duration.seconds(30),
     });
 
-    const deleteUserByIdFunction = new lambda.Function(
-      this,
-      "DeleteUserByIdLambda",
-      {
-        runtime: lambda.Runtime.NODEJS_18_X,
-        code: lambda.Code.fromAsset(userFunctionsPath),
-        handler: "delete-user-by-id.handler",
-        layers: [sharedLayer],
-        environment: {
-          databaseSecretArn: dbCluster.secret?.secretArn ?? "",
-        },
-      }
-    );
-
-    const updateUserByIdFunction = new lambda.Function(
-      this,
-      "UpdateUserByIdLambda",
-      {
-        runtime: lambda.Runtime.NODEJS_18_X,
-        code: lambda.Code.fromAsset(userFunctionsPath),
-        handler: "update-user-by-id.handler",
-        layers: [sharedLayer],
-        environment: {
-          databaseSecretArn: dbCluster.secret?.secretArn ?? "",
-        },
-      }
-    );
-
-    // allow the lambda function to access credentials stored in AWS Secrets Manager
-    // the lambda function will be able to access the credentials for the default database in the db cluster
-    dbCluster.secret?.grantRead(getUsersFunction);
-
-    // Define API Gateway
-    const api = new apigateway.RestApi(this, "UserRestApi", {
-      restApiName: "UserApi",
-      description: "Api for managing users",
+    const createUser = new lambda.NodejsFunction(this, "createUser", {
+      entry: "./lambda/users/create-user.ts",
+      handler: "handler",
+      environment: {
+        CLUSTER_ARN: dbCluster.clusterArn,
+        SECRET_ARN: dbCluster.secret?.secretArn ?? "",
+      },
+      timeout: cdk.Duration.seconds(30),
     });
 
-    // Define API integrations
-    const getUsersIntegration = new apigateway.LambdaIntegration(
-      getUsersFunction
-    );
-    const getUserByIdIntegration = new apigateway.LambdaIntegration(
-      getUserByIdFunction
-    );
-    const createUserIntegration = new apigateway.LambdaIntegration(
-      createUserFunction
-    );
-    const deleteUserByIdIntegration = new apigateway.LambdaIntegration(
-      deleteUserByIdFunction
-    );
-    const updateUserByIdIntegration = new apigateway.LambdaIntegration(
-      updateUserByIdFunction
+    const deleteUserById = new lambda.NodejsFunction(this, "deleteUserById", {
+      entry: "./lambda/users/delete-user-by-id.ts",
+      handler: "handler",
+      environment: {
+        CLUSTER_ARN: dbCluster.clusterArn,
+        SECRET_ARN: dbCluster.secret?.secretArn ?? "",
+      },
+      timeout: cdk.Duration.seconds(30),
+    });
+
+    const updateUserById = new lambda.NodejsFunction(this, "updateUserById", {
+      entry: "./lambda/users/update-user-by-id.ts",
+      handler: "handler",
+      environment: {
+        CLUSTER_ARN: dbCluster.clusterArn,
+        SECRET_ARN: dbCluster.secret?.secretArn ?? "",
+      },
+      timeout: cdk.Duration.seconds(30),
+    });
+
+    // Grant the lambda functions access to the data api and thus the database
+    [getUsers, getUserById, createUser, deleteUserById, updateUserById].forEach(
+      (fn) => dbCluster.grantDataApiAccess(fn)
     );
 
-    // Define Api resources and methods
-    const usersResource = api.root.addResource("users");
-    usersResource.addMethod("GET", getUsersIntegration); // GET /users
-    usersResource.addMethod("POST", createUserIntegration); // POST /users
+    /**
+     * Defining APIs
+     *
+     * APIs are defined as a hierarchy of resources and methods. addResource and addMethod can be used to build this hierarchy. The root resource is api.root.
+     *
+     * @link https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_apigateway-readme.html#defining-apis
+     */
+    const api = new cdk.aws_apigateway.RestApi(this, "api", {});
 
-    const userIdResource = usersResource.addResource("{id}");
-    userIdResource.addMethod("GET", getUserByIdIntegration); // GET /users/{id}
-    userIdResource.addMethod("DELETE", deleteUserByIdIntegration); // DELETE /users/{id}
-    userIdResource.addMethod("PUT", updateUserByIdIntegration); // PUT /users/{id}
+    // Define resources and methods for /users
+    const users = api.root.addResource("users");
+    const usersMethods = [
+      { method: "GET", fn: getUsers },
+      { method: "POST", fn: createUser },
+    ];
+    usersMethods.forEach(({ method, fn }) =>
+      users.addMethod(method, new cdk.aws_apigateway.LambdaIntegration(fn))
+    );
 
-    // create a cfn output for the api url
-    new CfnOutput(this, "ApiUrl", { value: api.url });
+    // Define resources and methods for /users/{id}
+    const user = users.addResource("{id}");
+    const userMethods = [
+      { method: "GET", fn: getUserById },
+      { method: "PATCH", fn: updateUserById },
+      { method: "DELETE", fn: deleteUserById },
+    ];
+    userMethods.forEach(({ method, fn }) =>
+      user.addMethod(method, new cdk.aws_apigateway.LambdaIntegration(fn))
+    );
+
+    new CfnOutput(this, "arn", { value: dbCluster.secret?.secretArn ?? "" });
   }
 }

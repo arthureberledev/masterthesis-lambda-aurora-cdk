@@ -1,35 +1,64 @@
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 
-// import { getPool } from "../shared/db";
+import {
+  ExecuteStatementCommand,
+  RDSDataClient,
+} from "@aws-sdk/client-rds-data";
+
+const rdsDataClient = new RDSDataClient({});
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
   try {
-    // const pool = await getPool();
-    // const [rows] = await pool.execute("SELECT * FROM users");
+    const secretArn = process.env.SECRET_ARN;
+    const resourceArn = process.env.CLUSTER_ARN;
 
-    if (event.httpMethod === "DELETE") {
+    if (!secretArn || !resourceArn) {
+      throw new Error("Missing environment variables");
+    }
+
+    if (event.httpMethod !== "DELETE") {
       return {
-        statusCode: 200,
+        statusCode: 405,
         headers: { "Content-Type": "application/json" },
-        // body: JSON.stringify(rows),
-        body: JSON.stringify({ message: "Hello World" }),
+        body: JSON.stringify({ message: "Method not allowed" }),
       };
     }
 
+    const id = event.pathParameters?.id;
+
+    if (!id) {
+      return {
+        statusCode: 400,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "Bad Request" }),
+      };
+    }
+
+    await rdsDataClient.send(
+      new ExecuteStatementCommand({
+        secretArn,
+        resourceArn,
+        database: "masterthesis_aurora_db",
+        sql: "DELETE FROM users WHERE id = :id;",
+        parameters: [{ name: "id", value: { longValue: parseInt(id) } }],
+      })
+    );
+
     return {
-      statusCode: 400,
-      headers: { "Content-Type": "application/json" },
-      // body: JSON.stringify(rows),
-      body: JSON.stringify({ message: "Bad Request" }),
+      statusCode: 204,
+      body: "",
     };
   } catch (error) {
     console.log(error);
     return {
       statusCode: 500,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "An error occurred" }),
+      body: JSON.stringify({
+        message:
+          error instanceof Error ? error.message : "Internal Server Error",
+      }),
     };
   }
 };
