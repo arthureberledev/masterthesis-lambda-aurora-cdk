@@ -50,8 +50,6 @@ export const handler = async (
       })
     );
 
-    console.log(generatedFields);
-
     const lastInsertedId = generatedFields?.[0].longValue;
     return {
       statusCode: 201,

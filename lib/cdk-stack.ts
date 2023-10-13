@@ -109,5 +109,6 @@ export class CdkStack extends cdk.Stack {
     );
 
     new CfnOutput(this, "arn", { value: dbCluster.secret?.secretArn ?? "" });
+    new CfnOutput(this, "db", { value: "masterthesis_aurora_db" });
   }
 }
