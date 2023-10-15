@@ -40,7 +40,7 @@ export const handler = async (
       new ExecuteStatementCommand({
         secretArn,
         resourceArn,
-        database: "masterthesis_aurora_db",
+        database: "masterthesis_aurora_serverless_db",
         sql: "DELETE FROM users WHERE id = :id;",
         parameters: [{ name: "id", value: { longValue: parseInt(id) } }],
       })

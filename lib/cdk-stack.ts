@@ -13,8 +13,8 @@ export class CdkStack extends cdk.Stack {
     const dbCluster = new cdk.aws_rds.ServerlessCluster(this, "AuroraCluster", {
       engine: cdk.aws_rds.DatabaseClusterEngine.AURORA_MYSQL,
       credentials: cdk.aws_rds.Credentials.fromSecret(dbSecret),
-      clusterIdentifier: "masterthesis-aurora-cluster",
-      defaultDatabaseName: "masterthesis_aurora_db",
+      clusterIdentifier: "masterthesis-aurora-serverless-cluster",
+      defaultDatabaseName: "masterthesis_aurora_serverless_db",
       enableDataApi: true,
       scaling: {
         autoPause: cdk.Duration.minutes(10),
@@ -109,6 +109,6 @@ export class CdkStack extends cdk.Stack {
     );
 
     new CfnOutput(this, "arn", { value: dbCluster.secret?.secretArn ?? "" });
-    new CfnOutput(this, "db", { value: "masterthesis_aurora_db" });
+    new CfnOutput(this, "db", { value: "masterthesis_aurora_serverless_db" });
   }
 }

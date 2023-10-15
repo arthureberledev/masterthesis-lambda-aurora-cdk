@@ -41,7 +41,7 @@ export const handler = async (
       new ExecuteStatementCommand({
         secretArn,
         resourceArn,
-        database: "masterthesis_aurora_db",
+        database: "masterthesis_aurora_serverless_db",
         sql: "INSERT INTO users (name, email) VALUES (:name, :email);",
         parameters: [
           { name: "name", value: { stringValue: name } },
